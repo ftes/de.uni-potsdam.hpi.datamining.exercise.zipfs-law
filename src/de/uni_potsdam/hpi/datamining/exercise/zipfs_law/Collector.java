@@ -1,10 +1,17 @@
 package de.uni_potsdam.hpi.datamining.exercise.zipfs_law;
+
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.PrintWriter;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import org.apache.commons.io.FileUtils;
 
@@ -15,32 +22,30 @@ public class Collector {
 
 	private final int maxThreads = Runtime.getRuntime().availableProcessors();
 	private final Map<String, Integer> results = new HashMap<>();
-	private int activeThreads = 0;
-	
-	public Collector() {
-		File directory = new File(DIRECTORY);
-		for (File file : FileUtils.listFiles(directory, EXT, true)) {
-			startThread(file);
+
+	public Collector(String directoryName, String[] extensions,
+			String outputName) throws InterruptedException, ExecutionException {
+		File directory = new File(directoryName);
+
+		List<CountCallable> callables = new ArrayList<>();
+		for (File file : FileUtils.listFiles(directory, extensions, true)) {
+			callables.add(new CountCallable(file));
 		}
-		
-		waitForFinish();
-		writeOutput();
-	}
-	
-	private synchronized void waitForFinish() {
-		while (activeThreads > 0) {
-			try {
-				wait();
-			} catch (InterruptedException e) {
-				e.printStackTrace();
-			}
+
+		ExecutorService executor = Executors.newFixedThreadPool(maxThreads);
+		for (Future<Map<String, Integer>> future : executor
+				.invokeAll(callables)) {
+			addResults(future.get());
 		}
+
+		executor.shutdown();
+		writeOutput(outputName);
 	}
-	
-	private void writeOutput() {
+
+	private void writeOutput(String outputName) {
 		PrintWriter out;
 		try {
-			out = new PrintWriter(OUTPUT);
+			out = new PrintWriter(outputName);
 			for (Entry<String, Integer> result : results.entrySet()) {
 				out.println(result.getKey() + "," + result.getValue());
 			}
@@ -54,29 +59,17 @@ public class Collector {
 		for (Entry<String, Integer> entry : threadResults.entrySet()) {
 			String string = entry.getKey();
 			Integer count = entry.getValue();
-			if (!results.containsKey(string)) {
+			Integer oldCount = results.get(string);
+			if (oldCount == null) {
 				results.put(string, count);
 			} else {
-				results.put(string, results.get(string) + count);
+				results.put(string, oldCount + count);
 			}
 		}
-		activeThreads--;
-		notify();
 	}
 
-	private synchronized void startThread(File file) {
-		if (activeThreads >= maxThreads) {
-			try {
-				wait();
-			} catch (InterruptedException e) {
-				e.printStackTrace();
-			}
-		}
-		activeThreads++;
-		new CountThread(this, file).start();
-	}
-
-	public static void main(String[] args) {
-		new Collector();
+	public static void main(String[] args) throws InterruptedException,
+			ExecutionException {
+		new Collector(DIRECTORY, EXT, OUTPUT);
 	}
 }
